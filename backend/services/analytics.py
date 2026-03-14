@@ -12,6 +12,12 @@ from models.analysis import (
 from models.hubspot import DealEnriched
 
 
+def _pl_to_deal_value(product_line: Optional[str]) -> Optional[str]:
+    """Map API product_line param to deal.product_line value."""
+    mapping = {"TA": "TA", "SI": "Skills Intelligence", "full_platform": "Full Platform"}
+    return mapping.get(product_line) if product_line and product_line != "all" else None
+
+
 def enrich_deal(deal) -> DealEnriched:
     company = get_company(deal.company_id)
     contact = get_contact(deal.contact_id)
@@ -32,8 +38,11 @@ def get_enriched_deals(stage: Optional[str] = None, industry: Optional[str] = No
     return [enrich_deal(d) for d in deals]
 
 
-def compute_overview() -> OverviewMetrics:
+def compute_overview(product_line: Optional[str] = None) -> OverviewMetrics:
     deals = get_deals()
+    pl_val = _pl_to_deal_value(product_line)
+    if pl_val:
+        deals = [d for d in deals if d.product_line == pl_val]
     won = [d for d in deals if d.stage == "closedwon"]
     lost = [d for d in deals if d.stage == "closedlost"]
     total_rev = sum(d.amount for d in won)
@@ -69,7 +78,7 @@ def compute_filter_options() -> FilterOptions:
     )
 
 
-def _apply_filters(deals, companies, quarter=None, industry=None, region=None, sales_rep=None):
+def _apply_filters(deals, companies, quarter=None, industry=None, region=None, sales_rep=None, product_line=None):
     """Shared filter logic for deals."""
     filtered = list(deals)
     if quarter:
@@ -85,6 +94,10 @@ def _apply_filters(deals, companies, quarter=None, industry=None, region=None, s
                     and companies[d.company_id].city.lower() == region.lower()]
     if sales_rep:
         filtered = [d for d in filtered if d.sales_rep == sales_rep]
+    if product_line:
+        pl_val = _pl_to_deal_value(product_line)
+        if pl_val:
+            filtered = [d for d in filtered if d.product_line == pl_val]
     return filtered
 
 
@@ -94,13 +107,14 @@ def compute_breakdown(
     industry: Optional[str] = None,
     region: Optional[str] = None,
     sales_rep: Optional[str] = None,
+    product_line: Optional[str] = None,
 ) -> List[BreakdownItem]:
     """Breakdown by: industry, deal_size, source, company_size, buyer_title, geography."""
     deals = get_deals()
     companies = {c.id: c for c in get_companies()}
     contacts = {c.id: c for c in get_contacts()}
 
-    deals = _apply_filters(deals, companies, quarter, industry, region, sales_rep)
+    deals = _apply_filters(deals, companies, quarter, industry, region, sales_rep, product_line)
 
     buckets: Dict[str, list] = defaultdict(list)
 
@@ -162,8 +176,11 @@ def compute_breakdown(
     return results
 
 
-def compute_competitors() -> List[CompetitorMetrics]:
+def compute_competitors(product_line: Optional[str] = None) -> List[CompetitorMetrics]:
     deals = get_deals()
+    pl_val = _pl_to_deal_value(product_line)
+    if pl_val:
+        deals = [d for d in deals if d.product_line == pl_val]
     companies = {c.id: c for c in get_companies()}
 
     comp_deals: Dict[str, list] = defaultdict(list)
@@ -204,8 +221,11 @@ def compute_competitors() -> List[CompetitorMetrics]:
     return sorted(results, key=lambda x: x.win_rate)
 
 
-def compute_objections() -> List[ObjectionTheme]:
+def compute_objections(product_line: Optional[str] = None) -> List[ObjectionTheme]:
     deals = get_deals()
+    pl_val = _pl_to_deal_value(product_line)
+    if pl_val:
+        deals = [d for d in deals if d.product_line == pl_val]
     companies = {c.id: c for c in get_companies()}
 
     obj_data: Dict[str, dict] = defaultdict(lambda: {"deals": [], "industries": set()})
@@ -233,9 +253,12 @@ def compute_objections() -> List[ObjectionTheme]:
     return sorted(results, key=lambda x: x.frequency, reverse=True)
 
 
-def compute_icp() -> ICPProfile:
+def compute_icp(product_line: Optional[str] = None) -> ICPProfile:
     """Compute Ideal Customer Profile from winning deal patterns."""
     deals = get_deals()
+    pl_val = _pl_to_deal_value(product_line)
+    if pl_val:
+        deals = [d for d in deals if d.product_line == pl_val]
     companies = {c.id: c for c in get_companies()}
     contacts = {c.id: c for c in get_contacts()}
 
@@ -331,6 +354,7 @@ def compute_strategic_signals(
     industry: Optional[str] = None,
     region: Optional[str] = None,
     sales_rep: Optional[str] = None,
+    product_line: Optional[str] = None,
 ) -> StrategicSignals:
     """Compute all strategic signals for the CEO intelligence dashboard."""
     all_deals = get_deals()
@@ -370,6 +394,10 @@ def compute_strategic_signals(
                  and companies[d.company_id].city.lower() == region.lower()]
     if sales_rep:
         deals = [d for d in deals if d.sales_rep == sales_rep]
+    if product_line:
+        pl_val = _pl_to_deal_value(product_line)
+        if pl_val:
+            deals = [d for d in deals if d.product_line == pl_val]
 
     won = [d for d in deals if d.stage == "closedwon"]
     lost = [d for d in deals if d.stage == "closedlost"]
@@ -392,6 +420,10 @@ def compute_strategic_signals(
                           and companies[d.company_id].city.lower() == region.lower()]
         if sales_rep:
             prev_deals = [d for d in prev_deals if d.sales_rep == sales_rep]
+        if product_line:
+            pl_val_prev = _pl_to_deal_value(product_line)
+            if pl_val_prev:
+                prev_deals = [d for d in prev_deals if d.product_line == pl_val_prev]
 
         if prev_deals:
             prev_won = [d for d in prev_deals if d.stage == "closedwon"]
@@ -659,12 +691,13 @@ def compute_patterns(
     industry: Optional[str] = None,
     region: Optional[str] = None,
     sales_rep: Optional[str] = None,
+    product_line: Optional[str] = None,
 ) -> List[PatternInsight]:
     """Detect 7 pattern categories with conversation evidence."""
     all_deals = get_deals()
     companies = {c.id: c for c in get_companies()}
 
-    deals = _apply_filters(all_deals, companies, quarter, industry, region, sales_rep)
+    deals = _apply_filters(all_deals, companies, quarter, industry, region, sales_rep, product_line)
     won = [d for d in deals if d.stage == "closedwon"]
     lost = [d for d in deals if d.stage == "closedlost"]
     overall_wr = round(len(won) / len(deals) * 100, 1) if deals else 0
@@ -868,10 +901,13 @@ def compute_patterns(
     return patterns
 
 
-def compute_trends() -> List[TrendPoint]:
+def compute_trends(product_line: Optional[str] = None) -> List[TrendPoint]:
     """Monthly win rate trend bucketed by close_date."""
     from datetime import datetime as dt
     deals = get_deals()
+    pl_val = _pl_to_deal_value(product_line)
+    if pl_val:
+        deals = [d for d in deals if d.product_line == pl_val]
 
     monthly: Dict[str, dict] = defaultdict(lambda: {"won": 0, "total": 0, "revenue": 0.0, "date": None})
     for deal in deals:

@@ -10,8 +10,8 @@ router = APIRouter()
 
 
 @router.get("/overview")
-def overview():
-    return compute_overview().model_dump()
+def overview(product_line: Optional[str] = Query(None)):
+    return compute_overview(product_line=product_line).model_dump()
 
 
 @router.get("/filter-options")
@@ -27,29 +27,31 @@ def breakdown(
     industry: Optional[str] = Query(None),
     region: Optional[str] = Query(None),
     sales_rep: Optional[str] = Query(None),
+    product_line: Optional[str] = Query(None),
 ):
     """Dimensions: industry, deal_size, source, company_size, buyer_title, geography"""
     valid = ["industry", "deal_size", "source", "company_size", "buyer_title", "geography"]
     if dimension not in valid:
         return {"error": f"Invalid dimension. Choose from: {valid}"}
     return [item.model_dump() for item in compute_breakdown(
-        dimension, quarter=quarter, industry=industry, region=region, sales_rep=sales_rep,
+        dimension, quarter=quarter, industry=industry, region=region,
+        sales_rep=sales_rep, product_line=product_line,
     )]
 
 
 @router.get("/competitors")
-def competitors():
-    return [c.model_dump() for c in compute_competitors()]
+def competitors(product_line: Optional[str] = Query(None)):
+    return [c.model_dump() for c in compute_competitors(product_line=product_line)]
 
 
 @router.get("/objections")
-def objections():
-    return [o.model_dump() for o in compute_objections()]
+def objections(product_line: Optional[str] = Query(None)):
+    return [o.model_dump() for o in compute_objections(product_line=product_line)]
 
 
 @router.get("/icp")
-def icp():
-    return compute_icp().model_dump()
+def icp(product_line: Optional[str] = Query(None)):
+    return compute_icp(product_line=product_line).model_dump()
 
 
 @router.get("/patterns")
@@ -58,17 +60,19 @@ def patterns(
     industry: Optional[str] = Query(None),
     region: Optional[str] = Query(None),
     sales_rep: Optional[str] = Query(None),
+    product_line: Optional[str] = Query(None),
 ):
     """Pattern discovery with conversation evidence."""
     return [p.model_dump() for p in compute_patterns(
-        quarter=quarter, industry=industry, region=region, sales_rep=sales_rep,
+        quarter=quarter, industry=industry, region=region,
+        sales_rep=sales_rep, product_line=product_line,
     )]
 
 
 @router.get("/trends")
-def trends():
+def trends(product_line: Optional[str] = Query(None)):
     """Monthly win rate trend for the full dataset."""
-    return [t.model_dump() for t in compute_trends()]
+    return [t.model_dump() for t in compute_trends(product_line=product_line)]
 
 
 @router.get("/signals")
@@ -77,6 +81,7 @@ def signals(
     industry: Optional[str] = Query(None),
     region: Optional[str] = Query(None, description="City name"),
     sales_rep: Optional[str] = Query(None),
+    product_line: Optional[str] = Query(None),
 ):
     """Strategic signals for the CEO intelligence dashboard."""
     return compute_strategic_signals(
@@ -84,4 +89,5 @@ def signals(
         industry=industry,
         region=region,
         sales_rep=sales_rep,
+        product_line=product_line,
     ).model_dump()

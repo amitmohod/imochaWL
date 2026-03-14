@@ -6,6 +6,12 @@ from services.claude_ai import generate_insight
 router = APIRouter()
 
 
+@router.get("/product-brief")
+async def product_brief(product_line: Optional[str] = Query(None)):
+    content = await generate_insight("product_brief", product_line=product_line or "all")
+    return AIInsightResponse(content=content, prompt_type="product_brief").model_dump()
+
+
 @router.get("/win-loss-summary")
 async def win_loss_summary():
     content = await generate_insight("win_loss_summary")

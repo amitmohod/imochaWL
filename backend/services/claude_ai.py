@@ -7,7 +7,7 @@ import anthropic
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 from services.analytics import (
     compute_overview, compute_breakdown, compute_competitors,
-    compute_objections, compute_icp,
+    compute_objections, compute_icp, _pl_to_deal_value,
 )
 from services.data_source import get_deals, get_companies, get_contacts
 
@@ -136,6 +136,78 @@ def _get_data_context() -> str:
 """
 
 
+def _get_product_data_context(product_line: Optional[str] = None) -> str:
+    """Build a product-focused data summary filtered by product_line."""
+    deals = get_deals()
+    pl_val = _pl_to_deal_value(product_line)
+    if pl_val:
+        deals = [d for d in deals if d.product_line == pl_val]
+
+    pl_label = {"TA": "Talent Acquisition (TA)", "SI": "Skills Intelligence (SI)",
+                "full_platform": "Full Platform", "all": "All Products"}.get(product_line or "all", product_line or "all")
+
+    won = [d for d in deals if d.stage == "closedwon"]
+    lost = [d for d in deals if d.stage == "closedlost"]
+
+    # Loss reasons frequency with revenue
+    lr_data = defaultdict(lambda: {"count": 0, "revenue": 0.0})  # type: Dict[str, dict]
+    for d in lost:
+        if d.loss_reason:
+            lr_data[d.loss_reason]["count"] += 1
+            lr_data[d.loss_reason]["revenue"] += d.amount
+    lr_sorted = sorted(lr_data.items(), key=lambda x: x[1]["revenue"], reverse=True)
+
+    # Objection frequency in lost deals
+    obj_counts: Dict[str, int] = defaultdict(int)
+    for d in lost:
+        for obj in d.objections:
+            obj_counts[obj] += 1
+    obj_sorted = sorted(obj_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+
+    # Competitor win rates
+    comp_stats: Dict[str, dict] = defaultdict(lambda: {"won": 0, "total": 0, "revenue_lost": 0.0})
+    for d in deals:
+        if d.competitor:
+            comp_stats[d.competitor]["total"] += 1
+            if d.stage == "closedwon":
+                comp_stats[d.competitor]["won"] += 1
+            else:
+                comp_stats[d.competitor]["revenue_lost"] += d.amount
+    comp_sorted = sorted(comp_stats.items(),
+                         key=lambda x: x[1]["won"] / x[1]["total"] if x[1]["total"] else 0)
+
+    # Seniority win rates
+    contacts = {c.id: c for c in get_contacts()}
+    sen_stats: Dict[str, dict] = defaultdict(lambda: {"won": 0, "total": 0})
+    for d in deals:
+        contact = contacts.get(d.contact_id)
+        if contact:
+            sen = contact.seniority
+            sen_stats[sen]["total"] += 1
+            if d.stage == "closedwon":
+                sen_stats[sen]["won"] += 1
+
+    return f"""
+## Product Line: {pl_label}
+- Total deals: {len(deals)} | Won: {len(won)} | Lost: {len(lost)}
+- Overall win rate: {round(len(won)/len(deals)*100,1) if deals else 0}%
+- Total revenue (won): ${sum(d.amount for d in won):,.0f}
+- Revenue at risk (lost): ${sum(d.amount for d in lost):,.0f}
+
+## Top Loss Reasons (by revenue at risk)
+{chr(10).join(f"- {lr}: {data['count']} deals, ${data['revenue']:,.0f} at risk" for lr, data in lr_sorted[:6])}
+
+## Top Objections in Lost Deals
+{chr(10).join(f"- {obj}: raised {cnt} times" for obj, cnt in obj_sorted)}
+
+## Competitor Performance
+{chr(10).join(f"- {comp}: {round(data['won']/data['total']*100,1) if data['total'] else 0}% win rate ({data['won']}/{data['total']} deals), ${data['revenue_lost']:,.0f} revenue lost to them" for comp, data in comp_sorted)}
+
+## Buyer Seniority Win Rates
+{chr(10).join(f"- {sen}: {round(data['won']/data['total']*100,1) if data['total'] else 0}% win rate ({data['total']} deals)" for sen, data in sorted(sen_stats.items(), key=lambda x: x[1]['won']/x[1]['total'] if x[1]['total'] else 0, reverse=True))}
+"""
+
+
 PROMPT_TEMPLATES = {
     "win_loss_summary": """Based on the following CRM deal data, provide an executive summary of win/loss patterns.
 
@@ -227,16 +299,63 @@ Question: {question}
 
 
 async def generate_insight(prompt_type: str, industry: Optional[str] = None,
-                           question: Optional[str] = None) -> str:
+                           question: Optional[str] = None, **kwargs) -> str:
     """Generate AI insight using Claude API with caching."""
+    product_line = kwargs.get("product_line", None)
+
     # Don't cache ask_ai questions to keep responses fresh
-    cache_key = f"{prompt_type}:{industry or ''}:{question or ''}"
+    cache_key = f"{prompt_type}:{industry or ''}:{question or ''}:{product_line or ''}"
     if prompt_type != "ask_ai" and cache_key in _cache:
         return _cache[cache_key]
 
     if not ANTHROPIC_API_KEY:
         # Return a mock response for demo without API key
+        if prompt_type == "product_brief":
+            return _generate_product_brief_mock(product_line)
         return _generate_mock_response(prompt_type, industry, question)
+
+    # Handle product_brief separately (uses custom prompt building)
+    if prompt_type == "product_brief":
+        pl_label = {
+            "TA": "Talent Acquisition (TA)",
+            "SI": "Skills Intelligence (SI)",
+            "full_platform": "Full Platform",
+            "all": "All Products",
+        }.get(product_line or "all", product_line or "all")
+        data = _get_product_data_context(product_line)
+        prompt = f"""
+You are a product strategy consultant writing a brief for iMocha's {pl_label} product team.
+
+Analyze the following win/loss data and produce a concise Product Intelligence Brief.
+
+{data}
+
+Your brief must include exactly these three sections using markdown:
+
+**Top 3 roadmap investments by revenue impact:**
+For each: investment name → estimated revenue impact → context (deals count, competitor)
+
+**Emerging pattern:**
+One specific trend or shift that product leadership should act on now. Be concrete — name competitors, themes, buyer concerns.
+
+**Opportunity:**
+One specific competitive or market opening visible in this data. Where is a competitor weak? Which segment is underserved?
+
+Be specific, use actual numbers from the data. Maximum 150 words total.
+"""
+        try:
+            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+            message = client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=1000,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            result = message.content[0].text
+            _cache[cache_key] = result
+            return result
+        except Exception as e:
+            return _generate_product_brief_mock(product_line)
 
     template = PROMPT_TEMPLATES.get(prompt_type)
     if not template:
@@ -259,6 +378,26 @@ async def generate_insight(prompt_type: str, industry: Optional[str] = None,
         return result
     except Exception as e:
         return f"AI analysis unavailable: {str(e)}"
+
+
+def _generate_product_brief_mock(product_line: Optional[str] = None) -> str:
+    """Fallback mock response for product brief when no API key is available."""
+    pl_label = {
+        "TA": "Talent Acquisition (TA)",
+        "SI": "Skills Intelligence (SI)",
+        "full_platform": "Full Platform",
+        "all": "All Products",
+    }.get(product_line or "all", product_line or "all")
+    return f"""**Top 3 roadmap investments by revenue impact ({pl_label}):**
+1. Assessment platform depth → high revenue impact → affects multiple lost deals, recurring competitor pressure
+2. Integration completeness → significant pipeline blocked → ATS/HCM gaps cited frequently
+3. Reporting & analytics → moderate impact → buyer personas requesting board-level outputs
+
+**Emerging pattern:**
+Buyers are increasingly comparing iMocha's product capabilities against best-in-class point solutions. Competitors win on depth in specific categories. Product team should invest in closing the top 1-2 gaps before Q2.
+
+**Opportunity:**
+Mid-market BFSI segment shows lower competitive penetration from top rivals. Focused vertical positioning in BFSI could improve win rates by 10-15pp with targeted case studies and compliance-focused messaging."""
 
 
 # ---------------------------------------------------------------------------
