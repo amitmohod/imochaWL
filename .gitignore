@@ -1,0 +1,12 @@
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+.DS_Store
+*.zip
+*.docx
+node_modules/
+.env
