@@ -165,6 +165,16 @@ class PatternInsight(BaseModel):
     recommendation: str
 
 
+class TrendPoint(BaseModel):
+    month: str        # "Jan 2024"
+    year: int
+    month_num: int
+    win_rate: float
+    deals: int
+    won: int
+    revenue: float
+
+
 class AskAIRequest(BaseModel):
     question: str
 

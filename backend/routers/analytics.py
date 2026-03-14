@@ -3,7 +3,7 @@ from fastapi import APIRouter, Query
 from services.analytics import (
     compute_overview, compute_breakdown, compute_competitors,
     compute_objections, compute_icp, compute_strategic_signals,
-    compute_filter_options, compute_patterns,
+    compute_filter_options, compute_patterns, compute_trends,
 )
 
 router = APIRouter()
@@ -63,6 +63,12 @@ def patterns(
     return [p.model_dump() for p in compute_patterns(
         quarter=quarter, industry=industry, region=region, sales_rep=sales_rep,
     )]
+
+
+@router.get("/trends")
+def trends():
+    """Monthly win rate trend for the full dataset."""
+    return [t.model_dump() for t in compute_trends()]
 
 
 @router.get("/signals")

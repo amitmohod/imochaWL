@@ -7,7 +7,7 @@ from models.analysis import (
     OverviewMetrics, BreakdownItem, CompetitorMetrics, ObjectionTheme, ICPProfile,
     EnhancedKPIs, SegmentStat, GrowthLever, RevenueLeak, ICPFitSignal,
     ConversationThemeAgg, StrategicSignals, KPIComparison, ReasonCount, FilterOptions,
-    ConversationEvidence, PatternInsight,
+    ConversationEvidence, PatternInsight, TrendPoint,
 )
 from models.hubspot import DealEnriched
 
@@ -866,3 +866,34 @@ def compute_patterns(
     ))
 
     return patterns
+
+
+def compute_trends() -> List[TrendPoint]:
+    """Monthly win rate trend bucketed by close_date."""
+    from datetime import datetime as dt
+    deals = get_deals()
+
+    monthly: Dict[str, dict] = defaultdict(lambda: {"won": 0, "total": 0, "revenue": 0.0, "date": None})
+    for deal in deals:
+        key = deal.close_date.strftime("%b %Y")
+        monthly[key]["total"] += 1
+        monthly[key]["date"] = deal.close_date
+        if deal.stage == "closedwon":
+            monthly[key]["won"] += 1
+            monthly[key]["revenue"] += deal.amount
+
+    results = []
+    for key, data in monthly.items():
+        parsed = dt.strptime(key, "%b %Y")
+        results.append(TrendPoint(
+            month=key,
+            year=parsed.year,
+            month_num=parsed.month,
+            win_rate=round(data["won"] / data["total"] * 100, 1) if data["total"] else 0,
+            deals=data["total"],
+            won=data["won"],
+            revenue=round(data["revenue"], 2),
+        ))
+
+    results.sort(key=lambda x: (x.year, x.month_num))
+    return results
